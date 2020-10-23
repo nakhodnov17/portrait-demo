@@ -3,7 +3,7 @@
 """
 Made by @nizhib
 """
-
+import os
 import base64
 import io
 import logging
@@ -18,14 +18,30 @@ from imageio import imsave
 from PIL import Image
 from waitress import serve
 
+import torch.backends.cudnn
+
 from api import Segmentator
+
+torch.backends.cudnn.benchmark = True
+torch.manual_seed(123)
+torch.cuda.random.manual_seed(123)
+
+# Set proper device for computations
+dtype, device, cuda_device_id = torch.float32, None, 0
+os.environ["CUDA_VISIBLE_DEVICES"] = '{0}'.format(str(cuda_device_id) if cuda_device_id is not None else '')
+if cuda_device_id is not None and torch.cuda.is_available():
+    device = 'cuda:{0:d}'.format(0)
+else:
+    device = torch.device('cpu')
+
+print(dtype, device)
 
 LOGGING_LEVEL = 'INFO'
 LOGGING_FORMAT = '[%(asctime)s] %(name)s:%(lineno)d: %(message)s'
 
 logging.basicConfig(format=LOGGING_FORMAT, level=LOGGING_LEVEL)
 
-segmentator = Segmentator()
+segmentator = Segmentator(path='./checkpoints/last_full.pth', dtype=dtype, device=device)
 
 app = Flask(__name__)
 logger = logging.getLogger(__file__)
@@ -49,7 +65,10 @@ def handle():
             raise ValueError(
                 f'No image source found in request fields: {data.keys()}')
 
+        st_time = time.time()
         mask = segmentator.predict(img)
+        logger.info('2. Segmentation took {} s.'.format(time.time() - st_time))
+
         mask = (mask * 255).astype(np.uint8)
 
         fmem = io.BytesIO()

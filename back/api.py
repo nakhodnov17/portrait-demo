@@ -1,55 +1,40 @@
-"""
-Made by @nizhib
-"""
-
 import torch
-from torchvision import transforms
 
-from models import unet_resnext50
+import numpy as np
 
+import albumentations as alb
 
-def sanitize(state_dict):
-    cpu = torch.device('cpu')
-    sanitized = dict()
-    for key in state_dict:
-        if key.startswith('module.'):
-            sanitized[key[7:]] = state_dict[key].to(cpu)
-        else:
-            sanitized[key] = state_dict[key].to(cpu)
-    return sanitized
+from src.bicanet import BiCADenseNet
 
 
-def load_state(path):
-    state = torch.load(path, map_location='cpu')
-    if 'state_dict' in state:
-        state = state['state_dict']
-    state = sanitize(state)
-    return state
+class Segmentator:
+    PORTRAIT_MEAN, PORTRAIT_STD = (0.5107, 0.4506, 0.4192), (0.3020, 0.2839, 0.2802)
 
-
-class Segmentator(object):
-    size = (320, 240)
-
-    meanstd = {
-        'mean': [0.485, 0.456, 0.406],
-        'std': [0.229, 0.224, 0.225]
-    }
-    normalize = transforms.Normalize(**meanstd)
-    preprocess = transforms.Compose([
-        transforms.Resize(size),
-        transforms.Pad((8, 0), padding_mode='reflect'),
-        transforms.ToTensor(),
-        normalize
+    _image_transform = alb.Compose([
+        alb.Normalize(mean=PORTRAIT_MEAN, std=PORTRAIT_STD, always_apply=True),
+        alb.Resize(256, 192, always_apply=True)
     ])
 
-    def __init__(self):
-        self.net = unet_resnext50(num_classes=1, pretrained=True)
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    def __init__(self, path, dtype=torch.float32, device=torch.device('cpu')):
+        self.path = path
+        self.dtype = dtype
+        self.device = device
 
-    @torch.no_grad()
+        model_checkpoint = torch.load(path, map_location=torch.device('cpu'))
+
+        self.model = BiCADenseNet(num_classes=2, mcfb_h=256, mcfb_w=192)
+        self.model.load_state_dict(model_checkpoint['model_state_dict'])
+
+        self.model.to(device=device, dtype=dtype)
+        self.model.eval()
+
     def predict(self, image):
-        image = self.preprocess(image)
-        tensor = torch.stack((image,)).to(self.device)
-        logits = self.net(tensor)
-        probs = torch.sigmoid(logits).data[0, 0, :, 8:-8].to('cpu').numpy()
-        return probs
+        with torch.no_grad():
+            image = Segmentator._image_transform(
+                image=np.array(image),
+            )['image']
+
+            image_tensor = torch.tensor(image, dtype=self.dtype, device=self.device).permute(2, 0, 1)
+            segmentation = torch.softmax(self.model(image_tensor[None, :, :, :]), dim=1)[0, 1]
+
+            return segmentation.cpu().numpy()

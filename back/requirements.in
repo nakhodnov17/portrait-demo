@@ -3,6 +3,8 @@ imageio
 numpy
 pillow
 requests
-torch
+torch==1.6.0
 torchvision
 waitress
+albumentations
+pretrainedmodels
